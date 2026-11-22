@@ -323,6 +323,11 @@ function updatePlay(dt) {
   const events = [];
   tickTimers(dt);
   if (wasPressed('KeyB')) toggleBlackout();
+  // M mutes every sound at once; the game plays on silently.
+  if (wasPressed('KeyM')) {
+    audio.setMuted(!audio.isMuted());
+    toast(audio.isMuted() ? 'Sound off' : 'Sound on', '#e8ecf4', 1.2);
+  }
   // R restarts the floor: the banked loot stays banked, the floor resets.
   if (wasPressed('KeyR')) {
     startFloor(state.levelIndex);

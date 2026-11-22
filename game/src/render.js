@@ -546,7 +546,7 @@ function veil(ctx) {
 }
 
 // The pause menu: the game is frozen, and the thief can read the controls
-// without the floor moving under them.
+// without the floor moving under them — plus where the job card stands.
 function drawPaused(ctx, state) {
   veil(ctx);
   ctx.textAlign = 'center';
@@ -558,11 +558,20 @@ function drawPaused(ctx, state) {
   const lines = [
     'WASD / arrows — move        SHIFT — sneak        Hold E — grab / crack / panel',
     'Click — throw a coin        Q — EMP        B — Blackout Mode        R — restart floor',
+    'M — sound on / off',
     '',
     'H — how to play        P or Esc — keep creeping',
   ];
   lines.forEach((line, i) => ctx.fillText(line, VIEW_W / 2, 268 + i * 26));
-  void state;
+  if (state.objectives && state.objectives.length > 0) {
+    ctx.fillStyle = GOLD;
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillText(
+      'The job: ' + objectivesDoneCount(state.objectives) + '/' + state.objectives.length + ' done',
+      VIEW_W / 2,
+      268 + lines.length * 26 + 18,
+    );
+  }
 }
 
 function drawTitle(ctx, state) {
@@ -584,7 +593,7 @@ function drawTitle(ctx, state) {
     'Hold E — grab loot, crack the vault, work a camera panel',
     'Click — throw a coin to pull a guard away        Q — EMP: cameras dark 10s (−$250)',
     'B — Blackout Mode: kill the lights, shorten every cone, loot pays 15% more',
-    'H — how to play        R — restart the floor',
+    'H — how to play        R — restart the floor        M — sound on / off',
     'Dark floor patches are shadow: vision cones reach half as far there.',
     '',
     'Press ENTER or click to start the job',
@@ -619,6 +628,7 @@ function drawHelp(ctx, state) {
     'Q — EMP: every camera goes dark for 10 seconds (−$250, once a floor)',
     'B — Blackout Mode: the lights die, every cone shortens, loot pays 15% more',
     'R — restart this floor (the loot you banked stays banked)',
+    'M — sound on / off',
     'P or Esc — pause',
     '',
     'The job card in the corner lists the floor: half the loose loot, the vault,',

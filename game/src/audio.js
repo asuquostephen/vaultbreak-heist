@@ -8,6 +8,18 @@ export function makeAudio() {
   let ctx = null;
   let master = null;
   let bed = null; // the night bed's nodes, while Blackout Mode holds
+  let muted = false; // M toggles every sound at once
+
+  // Silence or restore the whole mix. The cues keep firing; they just
+  // have nowhere to go while muted.
+  function setMuted(value) {
+    muted = value;
+    if (master) master.gain.value = muted ? 0 : 0.16;
+  }
+
+  function isMuted() {
+    return muted;
+  }
 
   function unlock() {
     try {
@@ -99,6 +111,8 @@ export function makeAudio() {
 
   return {
     unlock,
+    setMuted,
+    isMuted,
     // The lights die: a low thunk, then the bed comes up underneath.
     blackoutOn() {
       tone(180, 60, 0.25, 'sine', 0, 0.9);

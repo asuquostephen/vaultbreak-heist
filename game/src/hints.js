@@ -91,6 +91,30 @@ const HINTS = [
       return distance(guard.x, guard.y, state.player.x, state.player.y) < 220;
     },
   },
+  {
+    id: 'sneak',
+    text: 'Sneaking is slower, but the cones see you later — use it near guards',
+    seconds: 3.5,
+    when: (state) => state.player.sneaking && state.screen === 'play',
+  },
+  {
+    id: 'emp',
+    text: 'The alarm is climbing — Q fires the EMP and darkens every camera for 10 seconds',
+    seconds: 3.5,
+    when: (state) => !!state.alarm && state.alarm.value >= 60 && !state.player.empUsed,
+  },
+  {
+    id: 'lockdown',
+    text: 'LOCKDOWN — the van is sealed. Break line of sight until the meter drains',
+    seconds: 3.5,
+    when: (state) => !!state.alarm && state.alarm.lockdownFor > 0,
+  },
+  {
+    id: 'chase',
+    text: 'A guard is chasing you — run, break line of sight, and do not get cornered',
+    seconds: 3.5,
+    when: (state) => state.guards.some((g) => g.state === 'chase'),
+  },
 ];
 
 // The next hint this frame, or null. Only one hint speaks at a time, and
