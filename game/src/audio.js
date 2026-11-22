@@ -1,10 +1,13 @@
 // All sound is procedural Web Audio — no audio files. Short, quiet cues: a
 // coin's clink, a loot chime, the soft ticks of a vault being cracked, a
-// suspicion sting, the alarm's two-tone bite and the getaway jingle.
+// suspicion sting, the alarm's two-tone bite and the getaway jingle. And
+// one long one: the Blackout Mode night bed, a low detuned drone that hums
+// under the floor while the lights are out, and stops when they come back.
 
 export function makeAudio() {
   let ctx = null;
   let master = null;
+  let bed = null; // the night bed's nodes, while Blackout Mode holds
 
   function unlock() {
     try {
@@ -43,8 +46,69 @@ export function makeAudio() {
     }
   }
 
+  // The night bed: two low sines a few hertz apart, breathing slowly
+  // through a shared gain, so the dark has a sound of its own.
+  function startBed() {
+    if (!ctx || !master || bed) return;
+    try {
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0001;
+      gain.gain.exponentialRampToValueAtTime(0.05, ctx.currentTime + 1.2);
+      gain.connect(master);
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 0.07;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0.02;
+      lfo.connect(lfoGain);
+      lfoGain.connect(gain.gain);
+      const voices = [55, 55.7, 110.4, 120.9].map((freq) => {
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        osc.start();
+        return osc;
+      });
+      lfo.start();
+      bed = { gain, lfo, voices };
+    } catch {
+      bed = null;
+    }
+  }
+
+  function stopBed() {
+    if (!bed || !ctx) return;
+    try {
+      const { gain, lfo, voices } = bed;
+      bed = null;
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+      const stopAt = ctx.currentTime + 0.5;
+      for (const osc of voices) osc.stop(stopAt);
+      lfo.stop(stopAt);
+      setTimeout(() => {
+        try {
+          gain.disconnect();
+        } catch {
+          /* already gone */
+        }
+      }, 600);
+    } catch {
+      bed = null;
+    }
+  }
+
   return {
     unlock,
+    // The lights die: a low thunk, then the bed comes up underneath.
+    blackoutOn() {
+      tone(180, 60, 0.25, 'sine', 0, 0.9);
+      startBed();
+    },
+    // The lights come back: the bed fades, a soft click.
+    blackoutOff() {
+      stopBed();
+      tone(520, 520, 0.06, 'triangle', 0, 0.5);
+    },
     click() {
       tone(660, 660, 0.05, 'square', 0, 0.4);
     },

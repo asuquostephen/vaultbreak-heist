@@ -2,14 +2,16 @@
 // guards, the cameras and the alarm. Screens: title, play, busted, results.
 // The run: three floors, loot banked floor by floor, one EMP and three
 // coins a floor, and a van that seals shut while the alarm is locked down.
+// Blackout Mode (B) threads through the whole loop: the toggle lives here,
+// the flag rides into every update, and the night bed starts and stops here.
 
-import { ALARM, LEVELS, PLAYER, TOOLS } from './config.js';
-import { attachInput, endFrameInput, getMouse, isHeld, moveVector, wasPressed } from './input.js';
-import { buildWorld, cellToPx } from './world.js';
+import { ALARM, LEVELS, TOOLS } from './config.js';
+import { attachInput, endFrameInput, getMouse, isHeld, moveVector, sneakHeld, wasPressed } from './input.js';
+import { buildWorld, cellToPx, exitContains } from './world.js';
 import { makeGuard, updateGuard } from './guards.js';
 import { makeCamera, PANEL_DISABLE_SECONDS, updateCamera } from './cameras.js';
 import { makeAlarm, spikeAlarm, updateAlarm } from './alarm.js';
-import { makePlayer, throwCoin, updatePlayer } from './player.js';
+import { makePlayer, coinNoiseRadius, throwCoin, updatePlayer } from './player.js';
 import { clamp } from './random.js';
 import { makeAudio } from './audio.js';
 import { drawGame } from './render.js';
@@ -52,6 +54,7 @@ const state = {
   crackTickFor: 0,
   lockdownPingFor: 0,
   sealedToastFor: 0,
+  blackout: false, // Blackout Mode: the lights are out on this floor
 };
 
 function announce(text) {
@@ -63,6 +66,8 @@ function toast(text, color, seconds = 2.2) {
 }
 
 function startFloor(index) {
+  if (state.blackout) audio.blackoutOff();
+  state.blackout = false;
   state.levelIndex = index;
   state.world = buildWorld(LEVELS[index]);
   state.player = makePlayer(state.world);
@@ -84,6 +89,21 @@ function startRun() {
   startFloor(0);
   state.screen = 'play';
   toast('Floor 1 — lift what glitters, crack the vault, reach the van', '#ffd166', 3.4);
+}
+
+// Kill the lights, or bring them back. The dark shortens every cone and
+// pays 15% more — and hums, until the lights come back on.
+function toggleBlackout() {
+  state.blackout = !state.blackout;
+  if (state.blackout) {
+    audio.blackoutOn();
+    toast('BLACKOUT — cones are shorter, loot pays 15% more', '#c7d2fe', 2.6);
+    announce('Blackout Mode on. Cones are shorter, loot pays 15 percent more.');
+  } else {
+    audio.blackoutOff();
+    toast('Lights back on — back to face value', '#e8ecf4', 1.6);
+    announce('Blackout Mode off.');
+  }
 }
 
 function gradeFor(ratio) {
@@ -132,17 +152,19 @@ function handleEvents(events) {
   for (const event of events) {
     if (event.type === 'loot') {
       audio.pickup();
-      state.haulLines.push({ label: 'Lifted: ' + event.item.kind, value: event.item.value });
+      const paid = event.paid !== undefined ? event.paid : event.item.value;
+      state.haulLines.push({ label: 'Lifted: ' + event.item.kind, value: paid });
       if (event.item.cased) {
         spikeAlarm(state.alarm, ALARM.caseGrabSpike);
         toast('Glass case smashed — the alarm jumped!', '#fb923c');
       } else {
-        toast('+$' + event.item.value + ' — ' + event.item.kind, '#86efac', 1.4);
+        toast('+$' + paid + ' — ' + event.item.kind, '#86efac', 1.4);
       }
     } else if (event.type === 'vaultCracked') {
       audio.pickup();
-      state.haulLines.push({ label: 'The vault, cracked', value: state.world.vault.value });
-      toast('VAULT CRACKED — +$' + state.world.vault.value + '. Now get to the van!', '#ffd166', 3);
+      const paid = event.paid !== undefined ? event.paid : state.world.vault.value;
+      state.haulLines.push({ label: 'The vault, cracked', value: paid });
+      toast('VAULT CRACKED — +$' + paid + '. Now get to the van!', '#ffd166', 3);
     } else if (event.type === 'panelUsed') {
       state.panelOffFor = PANEL_DISABLE_SECONDS;
       audio.panel();
@@ -168,7 +190,9 @@ function handleEvents(events) {
   }
 }
 
-function updateCoinFx(dt, events) {
+// Fly the thrown coins: slide each one to its landing spot, then ring the
+// noise out and pull nearby patrol guards over to look at it.
+function updateCoinFx(dt) {
   const next = [];
   for (const fx of state.coinFx) {
     if (!fx.landed) {
@@ -179,10 +203,12 @@ function updateCoinFx(dt, events) {
       if (k >= 1) {
         fx.landed = true;
         fx.age = 0;
-        // The clink lands: nearby guards turn to look at it.
+        // The clink lands: nearby guards turn to look at it. In the dark
+        // the ring carries further, so it pulls guards from further away.
+        const ring = coinNoiseRadius(state.blackout);
         for (const guard of state.guards) {
           const d = Math.hypot(guard.x - fx.x, guard.y - fx.y);
-          if (d < PLAYER.coinNoiseRadius && (guard.state === 'patrol' || guard.state === 'return')) {
+          if (d < ring && (guard.state === 'patrol' || guard.state === 'return')) {
             guard.lastSeen = { x: fx.x, y: fx.y };
             guard.suspicion = Math.max(guard.suspicion, 0.55);
             guard.state = 'investigate';
@@ -196,89 +222,125 @@ function updateCoinFx(dt, events) {
     }
   }
   state.coinFx = next;
-  void events;
 }
 
-function updatePlay(dt) {
-  const events = [];
+// Count the frame's timers down: wary sting, lockdown pings, sealed-van
+// nagging, camera downtime. Returns nothing; the state is the point.
+function tickTimers(dt) {
   state.time += dt;
   if (state.waryAudioFor > 0) state.waryAudioFor -= dt;
   if (state.sealedToastFor > 0) state.sealedToastFor -= dt;
   if (state.panelOffFor > 0) state.panelOffFor = Math.max(0, state.panelOffFor - dt);
   state.camerasOffFor = Math.max(state.player.empFor, state.panelOffFor);
+}
 
-  // EMP: one burst a floor, at a price.
+// EMP: one burst a floor, at a price. The Q key spends it.
+function handleEmp() {
   if (wasPressed('KeyQ') && !state.player.empUsed) {
     state.player.empUsed = true;
     state.player.empFor = TOOLS.empSeconds;
     audio.emp();
     toast('EMP — cameras dark for 10s (−$' + TOOLS.empCost + ')', '#2dd4bf');
   }
+}
 
-  updatePlayer(
-    state.world,
-    state.player,
-    dt,
-    { move: moveVector(), sneaking: isHeld('ShiftLeft', 'ShiftRight'), interact: isHeld('KeyE') },
-    events,
-  );
-
-  // Cracking carries: the safe's mechanism talks to anyone close enough.
-  if (state.player.cracking) {
-    state.crackTickFor -= dt;
-    if (state.crackTickFor <= 0) {
-      audio.crackTick();
-      state.crackTickFor = 0.13;
-    }
-    for (const guard of state.guards) {
-      const d = Math.hypot(guard.x - state.player.x, guard.y - state.player.y);
-      if (d < 165) guard.suspicion = clamp(guard.suspicion + 0.22 * dt, 0, 1);
-    }
+// Cracking carries: the safe's mechanism talks to anyone close enough.
+function crackNoise(dt) {
+  if (!state.player.cracking) return;
+  state.crackTickFor -= dt;
+  if (state.crackTickFor <= 0) {
+    audio.crackTick();
+    state.crackTickFor = 0.13;
   }
+  for (const guard of state.guards) {
+    const d = Math.hypot(guard.x - state.player.x, guard.y - state.player.y);
+    if (d < 165) guard.suspicion = clamp(guard.suspicion + 0.22 * dt, 0, 1);
+  }
+}
 
-  // A thrown coin.
+// A thrown coin: click, pay one of the floor's three, and fly it out.
+function handleCoinThrow() {
   const mouse = getMouse();
   state.mouse = mouse;
   if (mouse.clicked && state.player.coins > 0) {
     const land = throwCoin(state.player, mouse.x, mouse.y);
     if (land) {
-      state.coinFx.push({ sx: state.player.x, sy: state.player.y, tx: land.x, ty: land.y, x: state.player.x, y: state.player.y, t: 0, landed: false, age: 0 });
+      state.coinFx.push({
+        sx: state.player.x,
+        sy: state.player.y,
+        tx: land.x,
+        ty: land.y,
+        x: state.player.x,
+        y: state.player.y,
+        t: 0,
+        landed: false,
+        age: 0,
+      });
       audio.coin();
     }
   }
-  updateCoinFx(dt, events);
+}
 
-  for (const guard of state.guards) updateGuard(state.world, guard, state.player, dt, events);
+// Lockdown pressure: the building keeps reporting where the thief was.
+function lockdownPings(dt) {
+  if (state.alarm.lockdownFor <= 0) return;
+  state.lockdownPingFor -= dt;
+  if (state.lockdownPingFor > 0) return;
+  state.lockdownPingFor = 0.8;
+  for (const guard of state.guards) {
+    guard.lastSeen = { x: state.player.x, y: state.player.y };
+    if (guard.state === 'patrol' || guard.state === 'return') {
+      guard.state = 'investigate';
+      guard.suspicion = Math.max(guard.suspicion, 0.55);
+    }
+  }
+}
+
+function updatePlay(dt) {
+  const events = [];
+  tickTimers(dt);
+  if (wasPressed('KeyB')) toggleBlackout();
+  handleEmp();
+
+  updatePlayer(
+    state.world,
+    state.player,
+    dt,
+    { move: moveVector(), sneaking: sneakHeld(), interact: isHeld('KeyE') },
+    events,
+    state.blackout,
+  );
+
+  crackNoise(dt);
+  handleCoinThrow();
+  updateCoinFx(dt);
+
+  for (const guard of state.guards) {
+    updateGuard(state.world, guard, state.player, dt, events, state.blackout);
+  }
 
   let cameraStrength = 0;
   for (const camera of state.cameras) {
-    cameraStrength = Math.max(cameraStrength, updateCamera(state.world, camera, state.player, dt, state.camerasOffFor));
+    const strength = updateCamera(state.world, camera, state.player, dt, state.camerasOffFor, state.blackout);
+    cameraStrength = Math.max(cameraStrength, strength);
   }
 
-  // Lockdown pressure: the building keeps reporting where the thief was.
-  if (state.alarm.lockdownFor > 0) {
-    state.lockdownPingFor -= dt;
-    if (state.lockdownPingFor <= 0) {
-      state.lockdownPingFor = 0.8;
-      for (const guard of state.guards) {
-        guard.lastSeen = { x: state.player.x, y: state.player.y };
-        if (guard.state === 'patrol' || guard.state === 'return') {
-          guard.state = 'investigate';
-          guard.suspicion = Math.max(guard.suspicion, 0.55);
-        }
-      }
-    }
-  }
+  lockdownPings(dt);
 
   const loudest = state.guards.reduce((max, g) => Math.max(max, g.suspicion), 0);
-  updateAlarm(state.alarm, { cameraStrength, loudestGuardSuspicion: loudest, cracking: state.player.cracking }, dt, events);
+  updateAlarm(
+    state.alarm,
+    { cameraStrength, loudestGuardSuspicion: loudest, cracking: state.player.cracking },
+    dt,
+    events,
+    state.blackout,
+  );
   handleEvents(events);
   if (state.screen !== 'play') return;
 
   // The van.
-  const ex = state.world.exitRect;
   const p = state.player;
-  if (p.x > ex.x && p.x < ex.x + ex.w && p.y > ex.y && p.y < ex.y + ex.h) {
+  if (exitContains(state.world, p.x, p.y)) {
     if (state.alarm.lockdownFor > 0) {
       if (state.sealedToastFor <= 0) {
         toast('The van is sealed while the lockdown lasts!', '#f87171', 1.6);

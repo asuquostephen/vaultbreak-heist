@@ -1,6 +1,8 @@
 // Vaultbreak — tuning constants and the three floor plans.
 // The judge-facing shape of the game lives here: one screen per floor, a thief,
 // patrolling guards, sweeping cameras, loot, a vault and an alarm meter.
+// Blackout Mode (B key) is tuned here too: shorter cones, richer loot, a
+// darker floor — the whole risk/reward trade of killing the lights.
 
 export const VIEW_W = 1280;
 export const VIEW_H = 720;
@@ -9,6 +11,8 @@ export const CELL = 40; // floor grid cell in pixels
 export const GRID_X = 20; // floor origin
 export const GRID_Y = 64;
 
+// How the thief moves and works: on foot, sneaking is slow but harder to
+// see, and every grab happens within arm's reach of the target.
 export const PLAYER = {
   radius: 11,
   walkSpeed: 142,
@@ -18,6 +22,8 @@ export const PLAYER = {
   interactRange: 34,
 };
 
+// A guard's eyes: how far its cone reaches, how wide it opens, how fast
+// suspicion grows, and how shadow and sneaking blunt what it sees.
 export const GUARD = {
   radius: 12,
   patrolSpeed: 60,
@@ -31,6 +37,8 @@ export const GUARD = {
   turnRate: 3.4, // radians per second a guard can swing its facing
 };
 
+// A camera's eyes: a narrower cone than a guard's, sweeping back and forth
+// on its mount, feeding the alarm whenever it holds the thief in frame.
 export const CAMERA = {
   range: 176,
   halfAngle: 0.43,
@@ -39,6 +47,9 @@ export const CAMERA = {
   alarmRate: 17, // alarm points per second while it watches the thief
 };
 
+// The alarm meter: every eye on the thief feeds it, quiet feeds nothing,
+// and a full meter trips a lockdown — the exit seals, every guard hunts,
+// and the thief either breaks contact until it drains or gets caught.
 export const ALARM = {
   max: 100,
   decayRate: 7, // points per second once nothing has contributed for a moment
@@ -49,12 +60,31 @@ export const ALARM = {
   caseGrabSpike: 7, // instant points for smashing a glass case
   lockdownSeconds: 8,
   lockdownFloor: 55, // alarm value after a survived lockdown
+  lockdownDrain: 5.6, // points per second the meter sheds during a lockdown
 };
 
+// The thief's kit: three coins a floor to throw, one EMP burst a floor.
 export const TOOLS = {
   coinsPerFloor: 3,
   empSeconds: 10,
   empCost: 250, // score paid for one EMP burst
+};
+
+// Blackout Mode: press B and the lights die. Every cone in the building
+// shortens, the dark hides the thief a little better, the alarm drains
+// faster once the floor goes quiet — and every lift on the floor pays more,
+// because the crew only pays blackout rates for blackout risks.
+export const BLACKOUT = {
+  coneRangeMul: 0.75, // guard and camera cone ranges while the lights are out
+  suspicionGainMul: 0.85, // suspicion builds slower in the dark
+  alarmDecayMul: 1.5, // the meter drains faster once the floor goes quiet
+  payoutMul: 1.15, // every lift on the floor pays 15% more in the dark
+  lootGlowMul: 2.2, // loot glows harder so the thief can still find it
+  veilAlpha: 0.55, // how dark the floor gets when the lights die
+  flickerAmp: 0.1, // the lights stutter as they fail — veil alpha wobble
+  sweepMul: 0.8, // cameras sweep slower in the dark — their motors drag
+  chaseMemoryMul: 0.8, // a chasing guard loses the thief sooner in the dark
+  coinNoiseMul: 1.25, // a thrown coin rings further when the floor is quiet
 };
 
 // A floor plan: rows of the grid ('#' wall, '.' floor, 's' shadow floor),
@@ -86,22 +116,90 @@ export const LEVELS = [
     exit: { x: 1, y: 13, w: 2, h: 2 },
     vault: { x: 25, y: 1, w: 2, value: 2500, crackSeconds: 4 },
     loot: [
-      { x: 2, y: 6, kind: 'painting', value: 450, grabSeconds: 1.2 },
-      { x: 5, y: 8, kind: 'gems', value: 650, grabSeconds: 1.6, cased: true },
-      { x: 18, y: 3, kind: 'painting', value: 500, grabSeconds: 1.2 },
-      { x: 12, y: 13, kind: 'cash', value: 300, grabSeconds: 0.8 },
-      { x: 25, y: 12, kind: 'gold', value: 850, grabSeconds: 1.8, cased: true },
-      { x: 22, y: 6, kind: 'cash', value: 350, grabSeconds: 0.8 },
+      {
+        x: 2,
+        y: 6,
+        kind: 'painting',
+        value: 450,
+        grabSeconds: 1.2,
+      },
+      {
+        x: 5,
+        y: 8,
+        kind: 'gems',
+        value: 650,
+        grabSeconds: 1.6,
+        cased: true,
+      },
+      {
+        x: 18,
+        y: 3,
+        kind: 'painting',
+        value: 500,
+        grabSeconds: 1.2,
+      },
+      {
+        x: 12,
+        y: 13,
+        kind: 'cash',
+        value: 300,
+        grabSeconds: 0.8,
+      },
+      {
+        x: 25,
+        y: 12,
+        kind: 'gold',
+        value: 850,
+        grabSeconds: 1.8,
+        cased: true,
+      },
+      {
+        x: 22,
+        y: 6,
+        kind: 'cash',
+        value: 350,
+        grabSeconds: 0.8,
+      },
     ],
-    panels: [{ x: 19, y: 14 }],
+    panels: [
+      { x: 19, y: 14 },
+    ],
     guards: [
-      { patrol: [{ x: 5, y: 2 }, { x: 5, y: 13 }] },
-      { patrol: [{ x: 15, y: 13 }, { x: 15, y: 5 }, { x: 18, y: 5 }] },
-      { patrol: [{ x: 22, y: 9 }, { x: 28, y: 9 }, { x: 28, y: 12 }, { x: 22, y: 12 }] },
+      {
+        patrol: [
+          { x: 5, y: 2 },
+          { x: 5, y: 13 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 15, y: 13 },
+          { x: 15, y: 5 },
+          { x: 18, y: 5 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 22, y: 9 },
+          { x: 28, y: 9 },
+          { x: 28, y: 12 },
+          { x: 22, y: 12 },
+        ],
+      },
     ],
     cameras: [
-      { x: 15, y: 0, facing: Math.PI / 2, phase: 0 },
-      { x: 30, y: 8, facing: Math.PI, phase: 1.7 },
+      {
+        x: 15,
+        y: 0,
+        facing: Math.PI / 2,
+        phase: 0,
+      },
+      {
+        x: 30,
+        y: 8,
+        facing: Math.PI,
+        phase: 1.7,
+      },
     ],
   },
   {
@@ -129,25 +227,111 @@ export const LEVELS = [
     exit: { x: 1, y: 13, w: 2, h: 2 },
     vault: { x: 26, y: 1, w: 2, value: 4000, crackSeconds: 5 },
     loot: [
-      { x: 3, y: 5, kind: 'cash', value: 400, grabSeconds: 0.8 },
-      { x: 9, y: 9, kind: 'gems', value: 800, grabSeconds: 1.6, cased: true },
-      { x: 11, y: 2, kind: 'painting', value: 550, grabSeconds: 1.2 },
-      { x: 16, y: 13, kind: 'gold', value: 950, grabSeconds: 1.8, cased: true },
-      { x: 22, y: 3, kind: 'cash', value: 450, grabSeconds: 0.8 },
-      { x: 28, y: 9, kind: 'gems', value: 900, grabSeconds: 1.6, cased: true },
-      { x: 24, y: 13, kind: 'painting', value: 600, grabSeconds: 1.2 },
+      {
+        x: 3,
+        y: 5,
+        kind: 'cash',
+        value: 400,
+        grabSeconds: 0.8,
+      },
+      {
+        x: 9,
+        y: 9,
+        kind: 'gems',
+        value: 800,
+        grabSeconds: 1.6,
+        cased: true,
+      },
+      {
+        x: 11,
+        y: 2,
+        kind: 'painting',
+        value: 550,
+        grabSeconds: 1.2,
+      },
+      {
+        x: 16,
+        y: 13,
+        kind: 'gold',
+        value: 950,
+        grabSeconds: 1.8,
+        cased: true,
+      },
+      {
+        x: 22,
+        y: 3,
+        kind: 'cash',
+        value: 450,
+        grabSeconds: 0.8,
+      },
+      {
+        x: 28,
+        y: 9,
+        kind: 'gems',
+        value: 900,
+        grabSeconds: 1.6,
+        cased: true,
+      },
+      {
+        x: 24,
+        y: 13,
+        kind: 'painting',
+        value: 600,
+        grabSeconds: 1.2,
+      },
     ],
-    panels: [{ x: 8, y: 13 }, { x: 22, y: 5 }],
+    panels: [
+      { x: 8, y: 13 },
+      { x: 22, y: 5 },
+    ],
     guards: [
-      { patrol: [{ x: 4, y: 2 }, { x: 4, y: 13 }] },
-      { patrol: [{ x: 12, y: 13 }, { x: 12, y: 2 }] },
-      { patrol: [{ x: 18, y: 4 }, { x: 20, y: 4 }, { x: 20, y: 11 }, { x: 18, y: 11 }] },
-      { patrol: [{ x: 28, y: 12 }, { x: 24, y: 12 }, { x: 24, y: 5 }] },
+      {
+        patrol: [
+          { x: 4, y: 2 },
+          { x: 4, y: 13 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 12, y: 13 },
+          { x: 12, y: 2 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 18, y: 4 },
+          { x: 20, y: 4 },
+          { x: 20, y: 11 },
+          { x: 18, y: 11 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 28, y: 12 },
+          { x: 24, y: 12 },
+          { x: 24, y: 5 },
+        ],
+      },
     ],
     cameras: [
-      { x: 10, y: 0, facing: Math.PI / 2, phase: 0.4 },
-      { x: 20, y: 15, facing: -Math.PI / 2, phase: 2.1 },
-      { x: 30, y: 5, facing: Math.PI, phase: 1.1 },
+      {
+        x: 10,
+        y: 0,
+        facing: Math.PI / 2,
+        phase: 0.4,
+      },
+      {
+        x: 20,
+        y: 15,
+        facing: -Math.PI / 2,
+        phase: 2.1,
+      },
+      {
+        x: 30,
+        y: 5,
+        facing: Math.PI,
+        phase: 1.1,
+      },
     ],
   },
   {
@@ -175,28 +359,131 @@ export const LEVELS = [
     exit: { x: 1, y: 13, w: 2, h: 2 },
     vault: { x: 24, y: 1, w: 3, value: 6000, crackSeconds: 6 },
     loot: [
-      { x: 5, y: 7, kind: 'gems', value: 1000, grabSeconds: 1.6, cased: true },
-      { x: 13, y: 2, kind: 'cash', value: 500, grabSeconds: 0.8 },
-      { x: 17, y: 9, kind: 'gold', value: 1200, grabSeconds: 1.8, cased: true },
-      { x: 21, y: 4, kind: 'painting', value: 750, grabSeconds: 1.2 },
-      { x: 27, y: 9, kind: 'gems', value: 1100, grabSeconds: 1.6, cased: true },
-      { x: 12, y: 13, kind: 'cash', value: 550, grabSeconds: 0.8 },
-      { x: 24, y: 13, kind: 'painting', value: 800, grabSeconds: 1.2 },
-      { x: 28, y: 12, kind: 'gold', value: 1300, grabSeconds: 1.8, cased: true },
+      {
+        x: 5,
+        y: 7,
+        kind: 'gems',
+        value: 1000,
+        grabSeconds: 1.6,
+        cased: true,
+      },
+      {
+        x: 13,
+        y: 2,
+        kind: 'cash',
+        value: 500,
+        grabSeconds: 0.8,
+      },
+      {
+        x: 17,
+        y: 9,
+        kind: 'gold',
+        value: 1200,
+        grabSeconds: 1.8,
+        cased: true,
+      },
+      {
+        x: 21,
+        y: 4,
+        kind: 'painting',
+        value: 750,
+        grabSeconds: 1.2,
+      },
+      {
+        x: 27,
+        y: 9,
+        kind: 'gems',
+        value: 1100,
+        grabSeconds: 1.6,
+        cased: true,
+      },
+      {
+        x: 12,
+        y: 13,
+        kind: 'cash',
+        value: 550,
+        grabSeconds: 0.8,
+      },
+      {
+        x: 24,
+        y: 13,
+        kind: 'painting',
+        value: 800,
+        grabSeconds: 1.2,
+      },
+      {
+        x: 28,
+        y: 12,
+        kind: 'gold',
+        value: 1300,
+        grabSeconds: 1.8,
+        cased: true,
+      },
     ],
-    panels: [{ x: 14, y: 13 }, { x: 27, y: 5 }],
+    panels: [
+      { x: 14, y: 13 },
+      { x: 27, y: 5 },
+    ],
     guards: [
-      { patrol: [{ x: 7, y: 2 }, { x: 7, y: 10 }, { x: 4, y: 10 }] },
-      { patrol: [{ x: 14, y: 5 }, { x: 14, y: 13 }] },
-      { patrol: [{ x: 20, y: 12 }, { x: 20, y: 2 }] },
-      { patrol: [{ x: 27, y: 7 }, { x: 23, y: 7 }, { x: 23, y: 12 }] },
-      { patrol: [{ x: 10, y: 13 }, { x: 16, y: 13 }, { x: 16, y: 9 }] },
+      {
+        patrol: [
+          { x: 7, y: 2 },
+          { x: 7, y: 10 },
+          { x: 4, y: 10 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 14, y: 5 },
+          { x: 14, y: 13 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 20, y: 12 },
+          { x: 20, y: 2 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 27, y: 7 },
+          { x: 23, y: 7 },
+          { x: 23, y: 12 },
+        ],
+      },
+      {
+        patrol: [
+          { x: 10, y: 13 },
+          { x: 16, y: 13 },
+          { x: 16, y: 9 },
+        ],
+      },
     ],
     cameras: [
-      { x: 13, y: 0, facing: Math.PI / 2, phase: 0.9 },
-      { x: 18, y: 15, facing: -Math.PI / 2, phase: 0.2 },
-      { x: 30, y: 12, facing: Math.PI, phase: 2.6 },
-      { x: 0, y: 4, facing: 0, phase: 1.4 },
+      {
+        x: 13,
+        y: 0,
+        facing: Math.PI / 2,
+        phase: 0.9,
+      },
+      {
+        x: 18,
+        y: 15,
+        facing: -Math.PI / 2,
+        phase: 0.2,
+      },
+      {
+        x: 30,
+        y: 12,
+        facing: Math.PI,
+        phase: 2.6,
+      },
+      {
+        x: 0,
+        y: 4,
+        facing: 0,
+        phase: 1.4,
+      },
     ],
   },
 ];

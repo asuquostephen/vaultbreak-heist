@@ -1,16 +1,62 @@
 // The floor: builds a level's walls, shadow patches, loot, cameras, guards,
 // control panels, vault and exit from the plans in config.js, and answers
-// the geometry questions every other module asks — can I stand here, and
-// can that eye see this point.
+// the geometry questions every other module asks — can I stand here, can
+// that eye see this point, and how far does its cone reach now the lights
+// are out.
 
-import { CELL, GRID_X, GRID_Y } from './config.js';
+import { BLACKOUT, CELL, GRID_X, GRID_Y } from './config.js';
 
+// Grid cell centre, in pixels.
 export function cellToPx(cx, cy) {
-  return { x: GRID_X + cx * CELL + CELL / 2, y: GRID_Y + cy * CELL + CELL / 2 };
+  return {
+    x: GRID_X + (cx + 0.5) * CELL,
+    y: GRID_Y + (cy + 0.5) * CELL,
+  };
 }
 
+// Pixel point back to its grid cell.
 export function pxToCell(x, y) {
-  return { cx: Math.floor((x - GRID_X) / CELL), cy: Math.floor((y - GRID_Y) / CELL) };
+  return {
+    cx: Math.floor((x - GRID_X) / CELL),
+    cy: Math.floor((y - GRID_Y) / CELL),
+  };
+}
+
+// How far a cone reaches right now: full range with the lights on, shorter
+// while Blackout Mode holds. Guards, cameras and the renderer all ask here
+// so the drawn cone and the seeing cone never disagree.
+export function effectiveConeRange(baseRange, blackout) {
+  return blackout ? baseRange * BLACKOUT.coneRangeMul : baseRange;
+}
+
+// How deep the dark is at a point: 0 in the open, 1 in a shadow patch,
+// deeper still while the blackout holds — the thief hides best in the dark.
+export function shadowDepth(world, x, y, blackout) {
+  if (!inShadow(world, x, y)) return 0;
+  return blackout ? 1 : 0.6;
+}
+
+// Scan one row of the plan, collecting wall runs and shadow cells.
+function scanRow(rows, cy, width, wallCells, shadowCells, walls) {
+  let runStart = -1;
+  for (let cx = 0; cx <= width; cx++) {
+    const ch = cx < width ? rows[cy][cx] : '.';
+    if (ch === '#') {
+      wallCells.add(cx + ',' + cy);
+      if (runStart < 0) runStart = cx;
+    } else {
+      if (ch === 's') shadowCells.add(cx + ',' + cy);
+      if (runStart >= 0) {
+        walls.push({
+          x: GRID_X + runStart * CELL,
+          y: GRID_Y + cy * CELL,
+          w: (cx - runStart) * CELL,
+          h: CELL,
+        });
+        runStart = -1;
+      }
+    }
+  }
 }
 
 export function buildWorld(level) {
@@ -21,25 +67,7 @@ export function buildWorld(level) {
   const wallCells = new Set();
   const shadowCells = new Set();
   for (let cy = 0; cy < height; cy++) {
-    let runStart = -1;
-    for (let cx = 0; cx <= width; cx++) {
-      const ch = cx < width ? rows[cy][cx] : '.';
-      if (ch === '#') {
-        wallCells.add(cx + ',' + cy);
-        if (runStart < 0) runStart = cx;
-      } else {
-        if (ch === 's') shadowCells.add(cx + ',' + cy);
-        if (runStart >= 0) {
-          walls.push({
-            x: GRID_X + runStart * CELL,
-            y: GRID_Y + cy * CELL,
-            w: (cx - runStart) * CELL,
-            h: CELL,
-          });
-          runStart = -1;
-        }
-      }
-    }
+    scanRow(rows, cy, width, wallCells, shadowCells, walls);
   }
   const start = cellToPx(level.playerStart.x, level.playerStart.y);
   return {
@@ -87,11 +115,19 @@ export function isWallCell(world, cx, cy) {
   return world.wallCells.has(cx + ',' + cy);
 }
 
+// Is a point inside the getaway van's corner? The van is the way out —
+// unless a lockdown has sealed it.
+export function exitContains(world, x, y) {
+  const ex = world.exitRect;
+  return x > ex.x && x < ex.x + ex.w && y > ex.y && y < ex.y + ex.h;
+}
+
 export function inShadow(world, x, y) {
   const { cx, cy } = pxToCell(x, y);
   return world.shadowCells.has(cx + ',' + cy);
 }
 
+// Does a circle of radius r at (x, y) touch a wall rect?
 function circleHitsRect(x, y, r, rect) {
   const nx = Math.max(rect.x, Math.min(x, rect.x + rect.w));
   const ny = Math.max(rect.y, Math.min(y, rect.y + rect.h));
@@ -140,7 +176,8 @@ export function coneSees(world, ox, oy, facing, halfAngle, range, tx, ty) {
   const dist = Math.hypot(dx, dy);
   if (dist > range || dist < 1) return 0;
   const ang = Math.atan2(dy, dx);
-  let diff = Math.abs(((ang - facing) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI);
+  const TAU = Math.PI * 2;
+  const diff = Math.abs((((ang - facing) % TAU) + Math.PI * 3) % TAU - Math.PI);
   if (diff > halfAngle) return 0;
   if (!lineOfSight(world, ox, oy, tx, ty)) return 0;
   const centre = 1 - diff / halfAngle; // 1 dead ahead, 0 at the cone edge

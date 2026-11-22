@@ -2,16 +2,20 @@
 // The one frame the game is judged by is drawn here — a room the thief is
 // crossing, guards with vision cones, cameras, a loot target and the alarm
 // meter, all readable at a glance. Safe floor is cool, shadow is darker,
-// danger is amber or red, loot glows warm.
+// danger is amber or red, loot glows warm. In Blackout Mode the lights die:
+// a flickering veil drops over the floor, loot glows harder so the thief can
+// still find it, and the HUD says so in plain text.
 
-import { CAMERA, CELL, GRID_X, GRID_Y, GUARD, HUD_H, VIEW_W } from './config.js';
-import { clamp } from './random.js';
-import { isWallCell, pxToCell } from './world.js';
+import { BLACKOUT, CAMERA, CELL, GRID_X, GRID_Y, GUARD, HUD_H, VIEW_W } from './config.js';
+import { clamp, flickerNoise, glowPulse } from './random.js';
+import { effectiveConeRange, isWallCell, pxToCell, shadowDepth } from './world.js';
+import { payoutFor } from './player.js';
 
 const INK = '#e8ecf4';
 const DIM = '#9aa5b8';
 const GOLD = '#ffd166';
 const TEAL = '#2dd4bf';
+const FONT = 'system-ui, sans-serif';
 
 // March rays across a cone, stopping each at the first wall, so the drawn
 // cone matches what the eye behind it can actually see.
@@ -36,8 +40,18 @@ function conePath(ctx, world, ox, oy, facing, halfAngle, range) {
   ctx.closePath();
 }
 
+// Fill a watcher's cone in one colour: guards and cameras share the shape,
+// and the range they draw is the range they see with — blackout included.
+function fillCone(ctx, world, ox, oy, facing, halfAngle, baseRange, blackout, fill) {
+  const range = effectiveConeRange(baseRange, blackout);
+  conePath(ctx, world, ox, oy, facing, halfAngle, range);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
 function drawFloor(ctx, state) {
   const { world } = state;
+  const blackout = state.blackout;
   ctx.fillStyle = '#0b0e14';
   ctx.fillRect(0, 0, VIEW_W, 720);
   for (let cy = 0; cy < world.height; cy++) {
@@ -49,7 +63,10 @@ function drawFloor(ctx, state) {
       ctx.fillStyle = shadow ? '#161b27' : (cx + cy) % 2 === 0 ? '#242b3a' : '#222837';
       ctx.fillRect(x, y, CELL, CELL);
       if (shadow) {
-        ctx.fillStyle = 'rgba(45, 212, 191, 0.05)';
+        // Lit shadow keeps its old tint exactly; in the dark it deepens.
+        const depth = shadowDepth(world, x + CELL / 2, y + CELL / 2, blackout);
+        const tint = blackout ? 0.05 + depth * 0.06 : 0.05;
+        ctx.fillStyle = 'rgba(45, 212, 191, ' + tint + ')';
         ctx.fillRect(x, y, CELL, CELL);
       }
     }
@@ -64,7 +81,7 @@ function drawFloor(ctx, state) {
   ctx.strokeRect(ex.x + 3, ex.y + 3, ex.w - 6, ex.h - 6);
   ctx.setLineDash([]);
   ctx.fillStyle = '#4ade80';
-  ctx.font = 'bold 12px system-ui, sans-serif';
+  ctx.font = 'bold 12px ' + FONT;
   ctx.textAlign = 'center';
   ctx.fillText('GETAWAY', ex.x + ex.w / 2, ex.y + ex.h / 2 - 2);
   ctx.fillText('VAN', ex.x + ex.w / 2, ex.y + ex.h / 2 + 13);
@@ -107,7 +124,7 @@ function drawVault(ctx, state) {
   ctx.fillStyle = '#2b303c';
   ctx.fill();
   ctx.fillStyle = INK;
-  ctx.font = 'bold 12px system-ui, sans-serif';
+  ctx.font = 'bold 12px ' + FONT;
   ctx.textAlign = 'center';
   ctx.fillText(vault.cracked ? 'VAULT OPEN' : 'THE VAULT', cx, r.y + r.h + 15);
   if (!vault.cracked && vault.progress > 0) {
@@ -126,6 +143,7 @@ const LOOT_STYLE = {
 };
 
 function drawLoot(ctx, state) {
+  const blackout = state.blackout;
   for (const item of state.world.loot) {
     const style = LOOT_STYLE[item.kind];
     if (item.taken) {
@@ -134,7 +152,19 @@ function drawLoot(ctx, state) {
       ctx.strokeRect(item.px - 13, item.py - 13, 26, 26);
       continue;
     }
-    const pulse = 1 + Math.sin(state.time * 3 + item.px) * 0.06;
+    // In the dark the loot glows harder, so the thief can still find it.
+    if (blackout) {
+      const glowR = 30 * BLACKOUT.lootGlowMul;
+      const glow = ctx.createRadialGradient(item.px, item.py, 4, item.px, item.py, glowR);
+      glow.addColorStop(0, style.color + '55');
+      glow.addColorStop(1, style.color + '00');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(item.px, item.py, glowR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const pulseAmp = blackout ? 0.16 : 0.06;
+    const pulse = glowPulse(state.time, item.px, pulseAmp);
     ctx.save();
     ctx.translate(item.px, item.py);
     ctx.scale(pulse, pulse);
@@ -194,10 +224,11 @@ function drawLoot(ctx, state) {
       ctx.fillRect(item.px - 16, item.py - 16, 32, 32);
       ctx.strokeRect(item.px - 16, item.py - 16, 32, 32);
     }
+    const shown = payoutFor(item.value, blackout);
     ctx.fillStyle = style.color;
-    ctx.font = 'bold 10px system-ui, sans-serif';
+    ctx.font = 'bold 10px ' + FONT;
     ctx.textAlign = 'center';
-    ctx.fillText('$' + item.value, item.px, item.py + 27);
+    ctx.fillText('$' + shown, item.px, item.py + 27);
   }
 }
 
@@ -209,7 +240,7 @@ function drawPanels(ctx, state) {
     ctx.fillStyle = ready ? TEAL : '#4b5563';
     ctx.fillRect(panel.px - 8, panel.py - 6, 16, 9);
     ctx.fillStyle = DIM;
-    ctx.font = 'bold 9px system-ui, sans-serif';
+    ctx.font = 'bold 9px ' + FONT;
     ctx.textAlign = 'center';
     ctx.fillText('CAM PANEL', panel.px, panel.py + 20);
   }
@@ -219,9 +250,8 @@ function drawCameras(ctx, state) {
   const off = state.camerasOffFor > 0;
   for (const camera of state.cameras) {
     if (!off) {
-      conePath(ctx, state.world, camera.x, camera.y, camera.facing, CAMERA.halfAngle, CAMERA.range);
-      ctx.fillStyle = camera.watching ? 'rgba(239, 68, 68, 0.20)' : 'rgba(96, 165, 250, 0.13)';
-      ctx.fill();
+      const fill = camera.watching ? 'rgba(239, 68, 68, 0.20)' : 'rgba(96, 165, 250, 0.13)';
+      fillCone(ctx, state.world, camera.x, camera.y, camera.facing, CAMERA.halfAngle, CAMERA.range, state.blackout, fill);
     }
     ctx.beginPath();
     ctx.arc(camera.x, camera.y, 8, 0, Math.PI * 2);
@@ -241,9 +271,12 @@ function drawGuards(ctx, state) {
   for (const guard of state.guards) {
     const chasing = guard.state === 'chase';
     const wary = guard.suspicion >= 0.45;
-    conePath(ctx, state.world, guard.x, guard.y, guard.facing, GUARD.halfAngle, GUARD.range);
-    ctx.fillStyle = chasing ? 'rgba(239, 68, 68, 0.20)' : wary ? 'rgba(249, 115, 22, 0.17)' : 'rgba(251, 191, 36, 0.13)';
-    ctx.fill();
+    const fill = chasing
+      ? 'rgba(239, 68, 68, 0.20)'
+      : wary
+        ? 'rgba(249, 115, 22, 0.17)'
+        : 'rgba(251, 191, 36, 0.13)';
+    fillCone(ctx, state.world, guard.x, guard.y, guard.facing, GUARD.halfAngle, GUARD.range, state.blackout, fill);
     // Body: uniform, head, cap, facing tick.
     ctx.beginPath();
     ctx.arc(guard.x, guard.y, GUARD.radius, 0, Math.PI * 2);
@@ -271,7 +304,7 @@ function drawGuards(ctx, state) {
       ctx.stroke();
     }
     if (chasing || guard.suspicion >= 0.45) {
-      ctx.font = 'bold 17px system-ui, sans-serif';
+      ctx.font = 'bold 17px ' + FONT;
       ctx.textAlign = 'center';
       ctx.fillStyle = chasing ? '#ef4444' : '#fb923c';
       ctx.fillText(chasing ? '!' : '?', guard.x, guard.y - 28);
@@ -323,13 +356,14 @@ function drawPlayer(ctx, state) {
   // Hold-E prompt and progress.
   const target = player.near;
   if (state.screen === 'play' && target) {
+    const blackout = state.blackout;
     const label =
       target.kind === 'loot'
-        ? 'Hold E — grab the ' + target.item.kind + ' ($' + target.item.value + ')'
+        ? 'Hold E — grab the ' + target.item.kind + ' ($' + payoutFor(target.item.value, blackout) + ')'
         : target.kind === 'vault'
-          ? 'Hold E — crack the vault ($' + state.world.vault.value + ')'
+          ? 'Hold E — crack the vault ($' + payoutFor(state.world.vault.value, blackout) + ')'
           : 'Hold E — kill the cameras (12s)';
-    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.font = 'bold 13px ' + FONT;
     ctx.textAlign = 'center';
     const w = ctx.measureText(label).width + 18;
     ctx.fillStyle = 'rgba(5, 8, 14, 0.82)';
@@ -367,6 +401,15 @@ function drawCoinFx(ctx, state) {
   }
 }
 
+// The blackout veil: the lights are out, and what is left of them stutters.
+// Drawn over the floor but under the HUD, so the meter stays readable.
+function drawBlackoutVeil(ctx, state) {
+  const wobble = flickerNoise(state.time) - 0.5;
+  const alpha = clamp(BLACKOUT.veilAlpha + wobble * BLACKOUT.flickerAmp * 2, 0.35, 0.7);
+  ctx.fillStyle = 'rgba(2, 3, 8, ' + alpha.toFixed(3) + ')';
+  ctx.fillRect(0, HUD_H, VIEW_W, 720 - HUD_H);
+}
+
 function drawHud(ctx, state) {
   ctx.fillStyle = '#0d1119';
   ctx.fillRect(0, 0, VIEW_W, HUD_H);
@@ -374,27 +417,27 @@ function drawHud(ctx, state) {
   ctx.fillRect(0, HUD_H - 2, VIEW_W, 2);
   ctx.textAlign = 'left';
   ctx.fillStyle = GOLD;
-  ctx.font = 'bold 17px system-ui, sans-serif';
+  ctx.font = 'bold 17px ' + FONT;
   ctx.fillText('VAULTBREAK', 16, 24);
   ctx.fillStyle = DIM;
-  ctx.font = '12px system-ui, sans-serif';
+  ctx.font = '12px ' + FONT;
   ctx.fillText(state.world.level.name, 16, 43);
 
   // Loot carried. On the results screen the floor's take is already banked,
   // so only count the bag while the floor is live.
   const inBag = state.screen === 'play' ? state.player.lootCarried : 0;
   ctx.fillStyle = INK;
-  ctx.font = 'bold 19px system-ui, sans-serif';
+  ctx.font = 'bold 19px ' + FONT;
   ctx.fillText('$' + (state.banked + inBag).toLocaleString('en-US'), 300, 27);
   ctx.fillStyle = DIM;
-  ctx.font = '11px system-ui, sans-serif';
+  ctx.font = '11px ' + FONT;
   ctx.fillText('LOOT (this floor $' + state.player.lootCarried.toLocaleString('en-US') + ')', 300, 44);
 
   // The alarm meter.
   const ax = 560;
   const aw = 300;
   ctx.fillStyle = DIM;
-  ctx.font = 'bold 11px system-ui, sans-serif';
+  ctx.font = 'bold 11px ' + FONT;
   ctx.fillText(state.alarm.lockdownFor > 0 ? 'ALARM — LOCKDOWN!' : 'ALARM', ax, 15);
   ctx.fillStyle = '#1f2937';
   ctx.fillRect(ax, 20, aw, 16);
@@ -408,26 +451,38 @@ function drawHud(ctx, state) {
   ctx.strokeStyle = state.alarm.lockdownFor > 0 && Math.sin(state.time * 10) > 0 ? '#ef4444' : '#4b5563';
   ctx.lineWidth = 1.5;
   ctx.strokeRect(ax, 20, aw, 16);
-  ctx.fillStyle = DIM;
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.fillText(
-    state.camerasOffFor > 0 ? 'cameras dark ' + Math.ceil(state.camerasOffFor) + 's' : 'cameras live',
-    ax,
-    50,
-  );
+  if (state.blackout) {
+    // The HUD indicator: the lights are out, and loot pays the dark rate.
+    ctx.fillStyle = '#1e1b4b';
+    ctx.fillRect(ax, 38, 178, 15);
+    ctx.strokeStyle = '#818cf8';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ax, 38, 178, 15);
+    ctx.fillStyle = '#c7d2fe';
+    ctx.font = 'bold 10px ' + FONT;
+    ctx.fillText('BLACKOUT — LOOT +15%', ax + 6, 49);
+  } else {
+    ctx.fillStyle = DIM;
+    ctx.font = '11px ' + FONT;
+    ctx.fillText(
+      state.camerasOffFor > 0 ? 'cameras dark ' + Math.ceil(state.camerasOffFor) + 's' : 'cameras live',
+      ax,
+      50,
+    );
+  }
 
   // Tools and clock.
   ctx.fillStyle = INK;
-  ctx.font = 'bold 15px system-ui, sans-serif';
+  ctx.font = 'bold 15px ' + FONT;
   ctx.fillText('●'.repeat(state.player.coins) + '○'.repeat(Math.max(0, 3 - state.player.coins)), 920, 26);
   ctx.fillStyle = DIM;
-  ctx.font = '11px system-ui, sans-serif';
+  ctx.font = '11px ' + FONT;
   ctx.fillText('coins — click to throw', 920, 43);
   ctx.fillStyle = state.player.empUsed ? '#4b5563' : INK;
-  ctx.font = 'bold 15px system-ui, sans-serif';
+  ctx.font = 'bold 15px ' + FONT;
   ctx.fillText(state.player.empUsed ? 'EMP spent' : 'EMP ready (Q)', 1064, 26);
   ctx.fillStyle = DIM;
-  ctx.font = '11px system-ui, sans-serif';
+  ctx.font = '11px ' + FONT;
   const mm = Math.floor(state.time / 60);
   const ss = Math.floor(state.time % 60);
   ctx.fillText('time ' + mm + ':' + String(ss).padStart(2, '0') + ' · par ' + Math.round(state.world.level.parSeconds / 60 * 10) / 10 + 'm', 1064, 43);
@@ -437,13 +492,13 @@ function banner(ctx, state) {
   if (state.alarm.lockdownFor > 0 && state.screen === 'play') {
     ctx.fillStyle = 'rgba(239, 68, 68, 0.14)';
     ctx.fillRect(0, HUD_H, VIEW_W, 660);
-    ctx.font = 'bold 30px system-ui, sans-serif';
+    ctx.font = 'bold 30px ' + FONT;
     ctx.textAlign = 'center';
     ctx.fillStyle = '#fca5a5';
     ctx.fillText('LOCKDOWN — BREAK LINE OF SIGHT!', VIEW_W / 2, 110);
   }
   if (state.toast && state.toast.for > 0) {
-    ctx.font = 'bold 19px system-ui, sans-serif';
+    ctx.font = 'bold 19px ' + FONT;
     ctx.textAlign = 'center';
     const w = ctx.measureText(state.toast.text).width + 34;
     ctx.fillStyle = 'rgba(5, 8, 14, 0.85)';
@@ -462,13 +517,13 @@ function drawTitle(ctx, state) {
   veil(ctx);
   ctx.textAlign = 'center';
   ctx.fillStyle = GOLD;
-  ctx.font = 'bold 64px system-ui, sans-serif';
+  ctx.font = 'bold 64px ' + FONT;
   ctx.fillText('VAULTBREAK', VIEW_W / 2, 190);
   ctx.fillStyle = INK;
-  ctx.font = '21px system-ui, sans-serif';
+  ctx.font = '21px ' + FONT;
   ctx.fillText('The Meridian Job — three floors, one van, no witnesses.', VIEW_W / 2, 228);
   ctx.fillStyle = DIM;
-  ctx.font = '16px system-ui, sans-serif';
+  ctx.font = '16px ' + FONT;
   const lines = [
     'Cross each floor, lift what glitters, crack the vault, reach the van.',
     'Guards and cameras feed the ALARM meter — a full meter locks the floor down.',
@@ -476,6 +531,7 @@ function drawTitle(ctx, state) {
     'WASD / arrows — move        SHIFT — sneak (slower, harder to see)',
     'Hold E — grab loot, crack the vault, work a camera panel',
     'Click — throw a coin to pull a guard away        Q — EMP: cameras dark 10s (−$250)',
+    'B — Blackout Mode: kill the lights, shorten every cone, loot pays 15% more',
     'Dark floor patches are shadow: vision cones reach half as far there.',
     '',
     'Press ENTER or click to start the job',
@@ -483,7 +539,7 @@ function drawTitle(ctx, state) {
   lines.forEach((line, i) => ctx.fillText(line, VIEW_W / 2, 286 + i * 27));
   if (state.best !== null && state.best !== undefined) {
     ctx.fillStyle = GOLD;
-    ctx.font = 'bold 16px system-ui, sans-serif';
+    ctx.font = 'bold 16px ' + FONT;
     ctx.fillText('Best haul so far: $' + state.best.toLocaleString('en-US'), VIEW_W / 2, 286 + lines.length * 27 + 14);
   }
 }
@@ -492,13 +548,13 @@ function drawBusted(ctx, state) {
   veil(ctx);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ef4444';
-  ctx.font = 'bold 58px system-ui, sans-serif';
+  ctx.font = 'bold 58px ' + FONT;
   ctx.fillText('BUSTED', VIEW_W / 2, 250);
   ctx.fillStyle = INK;
-  ctx.font = '19px system-ui, sans-serif';
+  ctx.font = '19px ' + FONT;
   ctx.fillText('The floor keeps its secrets. The loot you carried is gone.', VIEW_W / 2, 300);
   ctx.fillStyle = DIM;
-  ctx.font = '16px system-ui, sans-serif';
+  ctx.font = '16px ' + FONT;
   ctx.fillText('Press ENTER to try ' + state.world.level.name + ' again', VIEW_W / 2, 350);
 }
 
@@ -507,12 +563,12 @@ function drawResults(ctx, state) {
   const r = state.results;
   ctx.textAlign = 'center';
   ctx.fillStyle = '#4ade80';
-  ctx.font = 'bold 46px system-ui, sans-serif';
+  ctx.font = 'bold 46px ' + FONT;
   ctx.fillText(r.isLast ? 'THE JOB IS DONE' : 'CLEAN GETAWAY', VIEW_W / 2, 140);
   ctx.fillStyle = DIM;
-  ctx.font = '16px system-ui, sans-serif';
+  ctx.font = '16px ' + FONT;
   ctx.fillText(r.floorName, VIEW_W / 2, 168);
-  ctx.font = '17px system-ui, sans-serif';
+  ctx.font = '17px ' + FONT;
   let y = 214;
   for (const line of r.lines) {
     ctx.fillStyle = DIM;
@@ -527,20 +583,20 @@ function drawResults(ctx, state) {
   ctx.fillRect(VIEW_W / 2 - 190, y - 18, 380, 2);
   ctx.textAlign = 'right';
   ctx.fillStyle = DIM;
-  ctx.font = 'bold 19px system-ui, sans-serif';
+  ctx.font = 'bold 19px ' + FONT;
   ctx.fillText('TOTAL HAUL', VIEW_W / 2 - 14, y + 16);
   ctx.fillStyle = GOLD;
   ctx.textAlign = 'left';
   ctx.fillText('$' + r.grandTotal.toLocaleString('en-US'), VIEW_W / 2 + 14, y + 16);
   ctx.textAlign = 'center';
   ctx.fillStyle = GOLD;
-  ctx.font = 'bold 84px system-ui, sans-serif';
+  ctx.font = 'bold 84px ' + FONT;
   ctx.fillText(r.grade, VIEW_W / 2, y + 108);
   ctx.fillStyle = DIM;
-  ctx.font = '15px system-ui, sans-serif';
+  ctx.font = '15px ' + FONT;
   ctx.fillText('grade', VIEW_W / 2, y + 132);
   ctx.fillStyle = INK;
-  ctx.font = '17px system-ui, sans-serif';
+  ctx.font = '17px ' + FONT;
   ctx.fillText(r.isLast ? 'Press ENTER to run it again' : 'Press ENTER for the next floor', VIEW_W / 2, y + 172);
 }
 
@@ -553,6 +609,7 @@ export function drawGame(ctx, state) {
   drawGuards(ctx, state);
   drawPlayer(ctx, state);
   drawCoinFx(ctx, state);
+  if (state.blackout) drawBlackoutVeil(ctx, state);
   drawHud(ctx, state);
   banner(ctx, state);
   if (state.screen === 'title') drawTitle(ctx, state);
@@ -562,10 +619,10 @@ export function drawGame(ctx, state) {
     veil(ctx);
     ctx.textAlign = 'center';
     ctx.fillStyle = INK;
-    ctx.font = 'bold 40px system-ui, sans-serif';
+    ctx.font = 'bold 40px ' + FONT;
     ctx.fillText('PAUSED', VIEW_W / 2, 340);
     ctx.fillStyle = DIM;
-    ctx.font = '16px system-ui, sans-serif';
+    ctx.font = '16px ' + FONT;
     ctx.fillText('P or Esc to keep creeping', VIEW_W / 2, 376);
   }
 }

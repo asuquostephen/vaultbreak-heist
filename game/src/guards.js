@@ -1,11 +1,13 @@
 // Guards: patrol their waypoints, grow suspicious when the thief crosses
 // their vision cone, investigate what they half-saw, and chase — and catch —
 // what they fully see. A guard's suspicion is its own; the alarm module
-// reads the loudest guard each frame.
+// reads the loudest guard each frame. In Blackout Mode their cones shorten
+// and suspicion builds slower, because the dark hides the thief — but a
+// guard that does spot the thief in the dark is just as dangerous.
 
-import { GUARD, PLAYER } from './config.js';
+import { BLACKOUT, GUARD, PLAYER } from './config.js';
 import { angleDelta, clamp, distance } from './random.js';
-import { coneSees, inShadow, moveCircle } from './world.js';
+import { coneSees, effectiveConeRange, inShadow, moveCircle } from './world.js';
 
 export function makeGuard(waypoints, index) {
   const start = waypoints[0];
@@ -29,6 +31,8 @@ export function makeGuard(waypoints, index) {
   };
 }
 
+// Swing the guard's facing toward an angle, capped by its turn rate.
+// Returns true once it is looking straight at the target.
 function turnToward(guard, targetAngle, dt) {
   const delta = angleDelta(guard.facing, targetAngle);
   const maxTurn = GUARD.turnRate * dt;
@@ -36,6 +40,8 @@ function turnToward(guard, targetAngle, dt) {
   return Math.abs(delta) < 0.05;
 }
 
+// Walk toward a point at a speed, sliding along walls. Returns true when
+// the guard arrives (close enough to stop).
 function walkToward(world, guard, tx, ty, speed, dt) {
   const d = distance(guard.x, guard.y, tx, ty);
   if (d < 2) return true;
@@ -54,21 +60,45 @@ function walkToward(world, guard, tx, ty, speed, dt) {
 }
 
 // How strongly this guard sees the thief right now (0 = not at all).
-export function guardSees(world, guard, player) {
-  let range = GUARD.range;
+// blackout shortens the cone; shadow shortens it further; sneaking blunts
+// whatever strength is left.
+export function guardSees(world, guard, player, blackout = false) {
+  let range = effectiveConeRange(GUARD.range, blackout);
   if (inShadow(world, player.x, player.y)) range *= GUARD.shadowRangeMul;
-  let strength = coneSees(world, guard.x, guard.y, guard.facing, GUARD.halfAngle, range, player.x, player.y);
+  let strength = coneSees(
+    world,
+    guard.x,
+    guard.y,
+    guard.facing,
+    GUARD.halfAngle,
+    range,
+    player.x,
+    player.y,
+  );
   if (strength > 0 && player.sneaking) strength *= GUARD.sneakRateMul;
   return strength;
 }
 
-export function updateGuard(world, guard, player, dt, events) {
-  const strength = guardSees(world, guard, player);
+// How fast suspicion grows from a sighting this frame. The dark slows it:
+// the guard is less sure of what it half-saw.
+function suspicionGain(strength, blackout, dt) {
+  const mul = blackout ? BLACKOUT.suspicionGainMul : 1;
+  return strength * 1.35 * mul * dt;
+}
+
+// How long a guard keeps chasing after losing sight. In the dark the trail
+// goes cold sooner: the guard cannot see where the thief went.
+function chaseMemorySeconds(blackout) {
+  return blackout ? 4.5 * BLACKOUT.chaseMemoryMul : 4.5;
+}
+
+export function updateGuard(world, guard, player, dt, events, blackout = false) {
+  const strength = guardSees(world, guard, player, blackout);
   const sees = strength > 0;
   if (sees) {
     guard.unseenFor = 0;
     guard.lastSeen = { x: player.x, y: player.y };
-    guard.suspicion = clamp(guard.suspicion + strength * 1.35 * dt, 0, 1);
+    guard.suspicion = clamp(guard.suspicion + suspicionGain(strength, blackout, dt), 0, 1);
   } else {
     guard.unseenFor += dt;
     if (guard.unseenFor > 0.7 && guard.state !== 'chase') {
@@ -80,9 +110,9 @@ export function updateGuard(world, guard, player, dt, events) {
   if (guard.suspicion >= 1) {
     if (guard.state !== 'chase') events.push({ type: 'alert', guard });
     guard.state = 'chase';
-    guard.memory = 4.5;
+    guard.memory = chaseMemorySeconds(blackout);
   } else if (guard.state === 'chase') {
-    if (sees) guard.memory = 4.5;
+    if (sees) guard.memory = chaseMemorySeconds(blackout);
     else guard.memory -= dt;
     if (guard.memory <= 0) {
       guard.state = 'investigate';
@@ -145,7 +175,8 @@ export function updateGuard(world, guard, player, dt, events) {
 
   // Stuck against a wall? Skip to the next waypoint rather than grinding.
   const movedDist = distance(guard.x, guard.y, guard.lastX, guard.lastY);
-  if (movedDist < speedEpsilon(dt) && guard.state === 'patrol') guard.stuckFor += dt;
+  const crawl = GUARD.patrolSpeed * dt * 0.25;
+  if (movedDist < crawl && guard.state === 'patrol') guard.stuckFor += dt;
   else guard.stuckFor = 0;
   if (guard.stuckFor > 1.4) {
     guard.stuckFor = 0;
@@ -155,11 +186,8 @@ export function updateGuard(world, guard, player, dt, events) {
   guard.lastY = guard.y;
 
   // The catch: a chasing guard that reaches the thief ends the night.
-  if (guard.state === 'chase' && distance(guard.x, guard.y, player.x, player.y) < GUARD.catchRadius + PLAYER.radius - 6) {
+  const catchRange = GUARD.catchRadius + PLAYER.radius - 6;
+  if (guard.state === 'chase' && distance(guard.x, guard.y, player.x, player.y) < catchRange) {
     events.push({ type: 'caught', guard });
   }
-}
-
-function speedEpsilon(dt) {
-  return GUARD.patrolSpeed * dt * 0.25;
 }
