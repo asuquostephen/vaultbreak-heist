@@ -545,6 +545,26 @@ function veil(ctx) {
   ctx.fillRect(0, 0, VIEW_W, 720);
 }
 
+// The pause menu: the game is frozen, and the thief can read the controls
+// without the floor moving under them.
+function drawPaused(ctx, state) {
+  veil(ctx);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = INK;
+  ctx.font = 'bold 40px ' + FONT;
+  ctx.fillText('PAUSED', VIEW_W / 2, 220);
+  ctx.fillStyle = DIM;
+  ctx.font = '16px ' + FONT;
+  const lines = [
+    'WASD / arrows — move        SHIFT — sneak        Hold E — grab / crack / panel',
+    'Click — throw a coin        Q — EMP        B — Blackout Mode        R — restart floor',
+    '',
+    'H — how to play        P or Esc — keep creeping',
+  ];
+  lines.forEach((line, i) => ctx.fillText(line, VIEW_W / 2, 268 + i * 26));
+  void state;
+}
+
 function drawTitle(ctx, state) {
   veil(ctx);
   ctx.textAlign = 'center';
@@ -701,14 +721,5 @@ export function drawGame(ctx, state) {
   else if (state.screen === 'title') drawTitle(ctx, state);
   else if (state.screen === 'busted') drawBusted(ctx, state);
   else if (state.screen === 'results' || state.screen === 'complete') drawResults(ctx, state);
-  else if (state.paused) {
-    veil(ctx);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = INK;
-    ctx.font = 'bold 40px ' + FONT;
-    ctx.fillText('PAUSED', VIEW_W / 2, 340);
-    ctx.fillStyle = DIM;
-    ctx.font = '16px ' + FONT;
-    ctx.fillText('P or Esc to keep creeping', VIEW_W / 2, 376);
-  }
+  else if (state.paused) drawPaused(ctx, state);
 }

@@ -155,5 +155,13 @@ export function makeAudio() {
       tone(784, 784, 0.1, 'triangle', 0.18, 0.8);
       tone(1046, 1046, 0.22, 'triangle', 0.27, 0.9);
     },
+    // The job is done: a longer fanfare than a single floor's getaway.
+    floorClear() {
+      tone(523, 523, 0.12, 'triangle', 0, 0.8);
+      tone(659, 659, 0.12, 'triangle', 0.1, 0.8);
+      tone(784, 784, 0.12, 'triangle', 0.2, 0.8);
+      tone(1046, 1046, 0.16, 'triangle', 0.3, 0.9);
+      tone(1318, 1318, 0.3, 'triangle', 0.42, 0.9);
+    },
   };
 }

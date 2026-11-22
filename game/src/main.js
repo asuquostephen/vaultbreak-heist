@@ -17,6 +17,7 @@ import { makeAudio } from './audio.js';
 import { drawGame } from './render.js';
 import { stageShot } from './shots.js';
 import { GHOST_CEILING, makeObjectives, updateObjectives } from './objectives.js';
+import { makeHints, nextHint } from './hints.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -59,6 +60,7 @@ const state = {
   objectives: [], // the job card for this floor (see objectives.js)
   alarmPeak: 0, // the highest the alarm meter has climbed this floor
   showingHelp: false, // the how-to-play overlay
+  hints: makeHints(), // first-time teaching toasts, once per run
   runStats: { floorsCleared: 0, alarmsTripped: 0, timeTotal: 0 },
 };
 
@@ -95,6 +97,7 @@ function startFloor(index) {
 function startRun() {
   state.banked = 0;
   state.runStats = { floorsCleared: 0, alarmsTripped: 0, timeTotal: 0 };
+  state.hints = makeHints();
   startFloor(0);
   state.screen = 'play';
   toast('Floor 1 — lift what glitters, crack the vault, reach the van', '#ffd166', 3.4);
@@ -162,7 +165,8 @@ function finishFloor() {
     }
   }
   state.screen = 'results';
-  audio.escape();
+  if (isLast) audio.floorClear();
+  else audio.escape();
   announce('Clean getaway. Total haul $' + state.banked + ', grade ' + state.results.grade + '.');
 }
 
@@ -366,6 +370,11 @@ function updatePlay(dt) {
   // Check the job card: a job finished this frame gets a chime.
   const completed = updateObjectives(state.objectives, state, state.alarmPeak);
   if (completed.length > 0) audio.objective();
+  // Teaching toasts: one hint at a time, and never over a live message.
+  if (!state.toast || state.toast.for <= 0) {
+    const hint = nextHint(state.hints, state);
+    if (hint) toast(hint.text, '#e8ecf4', hint.seconds);
+  }
   if (state.screen !== 'play') return;
 
   // The van.
