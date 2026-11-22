@@ -10,6 +10,7 @@ import { BLACKOUT, CAMERA, CELL, GRID_X, GRID_Y, GUARD, HUD_H, VIEW_W } from './
 import { clamp, flickerNoise, glowPulse } from './random.js';
 import { effectiveConeRange, isWallCell, pxToCell, shadowDepth } from './world.js';
 import { payoutFor } from './player.js';
+import { objectivesDoneCount } from './objectives.js';
 
 const INK = '#e8ecf4';
 const DIM = '#9aa5b8';
@@ -401,6 +402,37 @@ function drawCoinFx(ctx, state) {
   }
 }
 
+// The job card: the floor's four jobs, checked off as the night goes on,
+// in the top-left corner of the floor. A done job gets a green tick, a
+// failed one a red cross, the rest wait as empty rings.
+function drawObjectives(ctx, state) {
+  const jobs = state.objectives;
+  if (!jobs || jobs.length === 0 || state.screen !== 'play') return;
+  const x = 20;
+  const y = HUD_H + 8;
+  const w = 252;
+  const rowH = 19;
+  const h = 26 + jobs.length * rowH;
+  ctx.fillStyle = 'rgba(5, 8, 14, 0.72)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(154, 165, 184, 0.35)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = GOLD;
+  ctx.font = 'bold 11px ' + FONT;
+  ctx.fillText('THE JOB  ·  ' + objectivesDoneCount(jobs) + '/' + jobs.length, x + 10, y + 17);
+  ctx.font = '12px ' + FONT;
+  jobs.forEach((job, i) => {
+    const ry = y + 28 + i * rowH;
+    const mark = job.done ? '✓' : job.failed ? '✗' : '○';
+    ctx.fillStyle = job.done ? '#4ade80' : job.failed ? '#f87171' : DIM;
+    ctx.fillText(mark, x + 10, ry + 12);
+    ctx.fillStyle = job.done ? INK : job.failed ? '#fca5a5' : DIM;
+    ctx.fillText(job.label, x + 28, ry + 12);
+  });
+}
+
 // The blackout veil: the lights are out, and what is left of them stutters.
 // Drawn over the floor but under the HUD, so the meter stays readable.
 function drawBlackoutVeil(ctx, state) {
@@ -532,6 +564,7 @@ function drawTitle(ctx, state) {
     'Hold E — grab loot, crack the vault, work a camera panel',
     'Click — throw a coin to pull a guard away        Q — EMP: cameras dark 10s (−$250)',
     'B — Blackout Mode: kill the lights, shorten every cone, loot pays 15% more',
+    'H — how to play        R — restart the floor',
     'Dark floor patches are shadow: vision cones reach half as far there.',
     '',
     'Press ENTER or click to start the job',
@@ -542,6 +575,43 @@ function drawTitle(ctx, state) {
     ctx.font = 'bold 16px ' + FONT;
     ctx.fillText('Best haul so far: $' + state.best.toLocaleString('en-US'), VIEW_W / 2, 286 + lines.length * 27 + 14);
   }
+}
+
+// The help overlay: the full control list on one screen, over a veil, for
+// the thief who forgot a key mid-floor. H opens it, H closes it.
+function drawHelp(ctx, state) {
+  veil(ctx);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = GOLD;
+  ctx.font = 'bold 40px ' + FONT;
+  ctx.fillText('HOW TO PLAY', VIEW_W / 2, 150);
+  ctx.fillStyle = INK;
+  ctx.font = '19px ' + FONT;
+  ctx.fillText('Three floors. Lift what glitters, crack the vault, reach the van.', VIEW_W / 2, 186);
+  ctx.fillStyle = DIM;
+  ctx.font = '16px ' + FONT;
+  const lines = [
+    '',
+    'WASD / arrow keys — move the thief',
+    'SHIFT (hold) — sneak: slower, but guards and cameras see you later',
+    'E (hold) — grab loot, crack the vault, work a camera panel',
+    'Click — throw a coin: the clink pulls a patrolling guard over to look',
+    'Q — EMP: every camera goes dark for 10 seconds (−$250, once a floor)',
+    'B — Blackout Mode: the lights die, every cone shortens, loot pays 15% more',
+    'R — restart this floor (the loot you banked stays banked)',
+    'P or Esc — pause',
+    '',
+    'The job card in the corner lists the floor: half the loose loot, the vault,',
+    'keeping the alarm under 25, and the van. Keep the alarm under 25 and the',
+    'floor pays a $200 ghost bonus on top of the haul.',
+    'Dark floor patches are shadow: vision cones reach barely half as far there.',
+    'A full alarm meter locks the floor down — the van seals for 8 seconds,',
+    'and every guard hunts where the building last saw you.',
+    '',
+    'Press H to get back to the job',
+  ];
+  lines.forEach((line, i) => ctx.fillText(line, VIEW_W / 2, 224 + i * 26));
+  void state;
 }
 
 function drawBusted(ctx, state) {
@@ -595,9 +665,23 @@ function drawResults(ctx, state) {
   ctx.fillStyle = DIM;
   ctx.font = '15px ' + FONT;
   ctx.fillText('grade', VIEW_W / 2, y + 132);
+  // The whole job, when it is done: floors cleared, alarms tripped, time.
+  if (r.isLast && r.stats) {
+    const s = r.stats;
+    const mm = Math.floor(s.timeTotal / 60);
+    const ss = Math.floor(s.timeTotal % 60);
+    ctx.fillStyle = DIM;
+    ctx.font = '15px ' + FONT;
+    ctx.fillText(
+      'The job: ' + s.floorsCleared + ' floors  ·  ' + s.alarmsTripped + ' lockdown' + (s.alarmsTripped === 1 ? '' : 's') +
+      '  ·  ' + mm + ':' + String(ss).padStart(2, '0'),
+      VIEW_W / 2,
+      y + 158,
+    );
+  }
   ctx.fillStyle = INK;
   ctx.font = '17px ' + FONT;
-  ctx.fillText(r.isLast ? 'Press ENTER to run it again' : 'Press ENTER for the next floor', VIEW_W / 2, y + 172);
+  ctx.fillText(r.isLast ? 'Press ENTER to run it again' : 'Press ENTER for the next floor', VIEW_W / 2, y + 186);
 }
 
 export function drawGame(ctx, state) {
@@ -610,9 +694,11 @@ export function drawGame(ctx, state) {
   drawPlayer(ctx, state);
   drawCoinFx(ctx, state);
   if (state.blackout) drawBlackoutVeil(ctx, state);
+  drawObjectives(ctx, state);
   drawHud(ctx, state);
   banner(ctx, state);
-  if (state.screen === 'title') drawTitle(ctx, state);
+  if (state.showingHelp) drawHelp(ctx, state);
+  else if (state.screen === 'title') drawTitle(ctx, state);
   else if (state.screen === 'busted') drawBusted(ctx, state);
   else if (state.screen === 'results' || state.screen === 'complete') drawResults(ctx, state);
   else if (state.paused) {

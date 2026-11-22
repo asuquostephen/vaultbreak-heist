@@ -120,6 +120,11 @@ export function makeAudio() {
       tone(880, 880, 0.07, 'triangle', 0, 0.8);
       tone(1318, 1318, 0.1, 'triangle', 0.06, 0.8);
     },
+    // A job on the card is done: a bright two-note chime, higher than a pickup.
+    objective() {
+      tone(1046, 1046, 0.09, 'triangle', 0, 0.8);
+      tone(1568, 1568, 0.14, 'triangle', 0.08, 0.8);
+    },
     crackTick() {
       tone(340, 240, 0.03, 'square', 0, 0.25);
     },

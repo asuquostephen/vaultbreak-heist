@@ -16,6 +16,7 @@ import { clamp } from './random.js';
 import { makeAudio } from './audio.js';
 import { drawGame } from './render.js';
 import { stageShot } from './shots.js';
+import { GHOST_CEILING, makeObjectives, updateObjectives } from './objectives.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -55,6 +56,10 @@ const state = {
   lockdownPingFor: 0,
   sealedToastFor: 0,
   blackout: false, // Blackout Mode: the lights are out on this floor
+  objectives: [], // the job card for this floor (see objectives.js)
+  alarmPeak: 0, // the highest the alarm meter has climbed this floor
+  showingHelp: false, // the how-to-play overlay
+  runStats: { floorsCleared: 0, alarmsTripped: 0, timeTotal: 0 },
 };
 
 function announce(text) {
@@ -74,6 +79,9 @@ function startFloor(index) {
   state.guards = state.world.guardSpawns.map((patrol, i) => makeGuard(patrol, i));
   state.cameras = state.world.cameraSpawns.map((spawn) => makeCamera(spawn));
   state.alarm = makeAlarm();
+  state.objectives = makeObjectives(LEVELS[index]);
+  state.alarmPeak = 0;
+  state.showingHelp = false;
   state.time = 0;
   state.haulLines = [];
   state.coinFx = [];
@@ -86,6 +94,7 @@ function startFloor(index) {
 
 function startRun() {
   state.banked = 0;
+  state.runStats = { floorsCleared: 0, alarmsTripped: 0, timeTotal: 0 };
   startFloor(0);
   state.screen = 'play';
   toast('Floor 1 — lift what glitters, crack the vault, reach the van', '#ffd166', 3.4);
@@ -114,24 +123,33 @@ function gradeFor(ratio) {
   return 'D';
 }
 
+// The ghost bonus: $200 for a floor the alarm never woke up on — the
+// meter stayed under the ceiling the whole way to the van.
+const GHOST_BONUS = 200;
+
 function finishFloor() {
   const level = state.world.level;
   const lootTotal = state.player.lootCarried;
   const maxLoot = level.loot.reduce((sum, item) => sum + item.value, 0) + level.vault.value;
   const timeBonus = Math.max(0, Math.round((level.parSeconds - state.time) * 10));
   const empCost = state.player.empUsed ? TOOLS.empCost : 0;
-  const floorTotal = Math.max(0, lootTotal + timeBonus - empCost);
+  const ghostBonus = state.alarmPeak < GHOST_CEILING ? GHOST_BONUS : 0;
+  const floorTotal = Math.max(0, lootTotal + timeBonus - empCost + ghostBonus);
   state.banked += floorTotal;
   const lines = state.haulLines.slice();
   lines.push({ label: 'Time bonus (' + Math.max(0, Math.round(level.parSeconds - state.time)) + 's under par)', value: timeBonus });
+  if (ghostBonus > 0) lines.push({ label: 'Ghost — the floor never woke up', value: ghostBonus });
   if (empCost > 0) lines.push({ label: 'EMP burst', value: -empCost });
   const isLast = state.levelIndex >= LEVELS.length - 1;
+  state.runStats.floorsCleared += 1;
+  state.runStats.timeTotal += state.time;
   state.results = {
     floorName: level.name,
     lines,
     grandTotal: state.banked,
     grade: gradeFor(lootTotal / maxLoot),
     isLast,
+    stats: { ...state.runStats },
   };
   if (isLast) {
     if (state.best === null || state.banked > state.best) {
@@ -179,6 +197,7 @@ function handleEvents(events) {
       toast('SPOTTED!', '#f87171', 1.6);
     } else if (event.type === 'lockdown') {
       audio.lockdown();
+      state.runStats.alarmsTripped += 1;
       toast('LOCKDOWN — the van is sealed!', '#f87171', 3);
     } else if (event.type === 'lockdownOver') {
       toast('Lockdown over — the van is open again', '#86efac');
@@ -300,6 +319,12 @@ function updatePlay(dt) {
   const events = [];
   tickTimers(dt);
   if (wasPressed('KeyB')) toggleBlackout();
+  // R restarts the floor: the banked loot stays banked, the floor resets.
+  if (wasPressed('KeyR')) {
+    startFloor(state.levelIndex);
+    toast(state.world.level.name + ' — fresh start', '#e8ecf4', 1.6);
+    return;
+  }
   handleEmp();
 
   updatePlayer(
@@ -335,7 +360,12 @@ function updatePlay(dt) {
     events,
     state.blackout,
   );
+  // The meter's peak this floor is what the ghost job is judged on.
+  state.alarmPeak = Math.max(state.alarmPeak, state.alarm.value);
   handleEvents(events);
+  // Check the job card: a job finished this frame gets a chime.
+  const completed = updateObjectives(state.objectives, state, state.alarmPeak);
+  if (completed.length > 0) audio.objective();
   if (state.screen !== 'play') return;
 
   // The van.
@@ -354,6 +384,13 @@ function updatePlay(dt) {
 
 function update(dt) {
   if (state.toast && state.toast.for > 0) state.toast.for -= dt;
+  // H opens the how-to-play overlay anywhere it can be read; H closes it.
+  if (wasPressed('KeyH') && (state.screen === 'play' || state.screen === 'title')) {
+    state.showingHelp = !state.showingHelp;
+    audio.click();
+    return;
+  }
+  if (state.showingHelp) return;
   if (state.screen === 'title') {
     if (wasPressed('Enter') || getMouse().clicked) {
       audio.unlock();
